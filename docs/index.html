@@ -363,6 +363,18 @@
 </div>
 
 <script>
+  // corsproxy.io artık anonim istekleri kabul etmiyor (401 dönüyor) —
+  // https://corsproxy.io adresinden ücretsiz hesap açıp API anahtarınızı
+  // buraya yapıştırın. Boş bırakırsanız corsproxy.io çağrıları başarısız
+  // olmaya devam eder ve uygulama doğrudan reader/fallback adımına düşer.
+  var CORSPROXY_KEY = '444575bb';
+
+  function corsProxyUrl(targetUrl){
+    var u = 'https://corsproxy.io/?url=' + encodeURIComponent(targetUrl);
+    if(CORSPROXY_KEY) u += '&key=' + encodeURIComponent(CORSPROXY_KEY);
+    return u;
+  }
+
   var SCHOOLS = {
     ahti: {
       name: "Aliye-Hüseyin Tekbaş İlkokulu",
@@ -541,7 +553,7 @@
     // aynı POST'u corsproxy üzerinden tekrar dener.
     return attempt(ajaxUrl)
       .catch(function(){
-        return attempt('https://corsproxy.io/?url=' + encodeURIComponent(ajaxUrl));
+        return attempt(corsProxyUrl(ajaxUrl));
       })
       .then(function(json){
         return parseMebAjaxResponse(json, ajaxUrl);
@@ -615,7 +627,7 @@
   // through to the reader step below for this site; it's kept first because
   // it's cheap and works for any site that renders its list server-side.
   function fetchTableRows(url){
-    return fetchWithTimeout('https://corsproxy.io/?url=' + encodeURIComponent(url), 5000)
+    return fetchWithTimeout(corsProxyUrl(url), 5000)
       .then(function(res){
         if(!res.ok) throw new Error('proxy-failed');
         return res.text();
