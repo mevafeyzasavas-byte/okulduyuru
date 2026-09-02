@@ -1,0 +1,11 @@
+{
+  "name": "okulduyuru",
+  "displayName": "Okul Duyuru",
+  "version": "1.0.0",
+  "description": "Okul Duyuru ve Haber Panosu - Android APK",
+  "cordova": {
+    "platforms": [
+      "android"
+    ]
+  }
+}

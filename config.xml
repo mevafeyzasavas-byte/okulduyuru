@@ -1,0 +1,35 @@
+<?xml version='1.0' encoding='utf-8'?>
+<widget id="com.feyza.okulduyuru" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:android="http://schemas.android.com/apk/res/android">
+    <name>Okul Duyuru</name>
+    <description>Okul Duyuru ve Haber Panosu</description>
+    <author email="you@example.com" href="https://github.com/">Feyza</author>
+    <content src="index.html" />
+    <access origin="*" />
+    <allow-navigation href="*" />
+    <allow-intent href="http://*/*" />
+    <allow-intent href="https://*/*" />
+    <preference name="Orientation" value="portrait" />
+    <preference name="AndroidXEnabled" value="true" />
+    <preference name="MixedContentMode" value="0" />
+    <preference name="AndroidInsecureFileModeEnabled" value="true" />
+
+    <icon src="res/icon/android/ldpi.png" density="ldpi" />
+    <icon src="res/icon/android/mdpi.png" density="mdpi" />
+    <icon src="res/icon/android/hdpi.png" density="hdpi" />
+    <icon src="res/icon/android/xhdpi.png" density="xhdpi" />
+    <icon src="res/icon/android/xxhdpi.png" density="xxhdpi" />
+    <icon src="res/icon/android/xxxhdpi.png" density="xxxhdpi" />
+
+    <platform name="android">
+        <icon src="res/icon/android/ldpi.png" density="ldpi" />
+        <icon src="res/icon/android/mdpi.png" density="mdpi" />
+        <icon src="res/icon/android/hdpi.png" density="hdpi" />
+        <icon src="res/icon/android/xhdpi.png" density="xhdpi" />
+        <icon src="res/icon/android/xxhdpi.png" density="xxhdpi" />
+        <icon src="res/icon/android/xxxhdpi.png" density="xxxhdpi" />
+        <allow-intent href="market:*" />
+        <edit-config file="app/src/main/AndroidManifest.xml" mode="merge" target="/manifest/application">
+            <application android:usesCleartextTraffic="true" />
+        </edit-config>
+    </platform>
+</widget>
