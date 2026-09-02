@@ -363,16 +363,12 @@
 </div>
 
 <script>
-  // corsproxy.io artık anonim istekleri kabul etmiyor (401 dönüyor) —
-  // https://corsproxy.io adresinden ücretsiz hesap açıp API anahtarınızı
-  // buraya yapıştırın. Boş bırakırsanız corsproxy.io çağrıları başarısız
-  // olmaya devam eder ve uygulama doğrudan reader/fallback adımına düşer.
-  var CORSPROXY_KEY = '444575bb';
+  // Kendi Cloudflare Worker'ımız üzerinden proxy yapıyoruz (ücretsiz katman,
+  // günde 100.000 istek). corsproxy.io'ya bağımlılık kaldırıldı.
+  var WORKER_URL = 'https://mebduyuru-proxy.aorhansvs.workers.dev';
 
   function corsProxyUrl(targetUrl){
-    var u = 'https://corsproxy.io/?url=' + encodeURIComponent(targetUrl);
-    if(CORSPROXY_KEY) u += '&key=' + encodeURIComponent(CORSPROXY_KEY);
-    return u;
+    return WORKER_URL + '/?url=' + encodeURIComponent(targetUrl);
   }
 
   var SCHOOLS = {
@@ -550,7 +546,7 @@
     }
     // Önce doğrudan dene; tarayıcıdan çapraz-origin istek CORS'a takılırsa
     // (uç nokta kendi sitesi dışına Access-Control-Allow-Origin vermiyorsa)
-    // aynı POST'u corsproxy üzerinden tekrar dener.
+    // aynı POST'u Worker proxy üzerinden tekrar dener.
     return attempt(ajaxUrl)
       .catch(function(){
         return attempt(corsProxyUrl(ajaxUrl));
@@ -619,8 +615,8 @@
       });
   }
 
-  // Fetches the raw page HTML through a CORS proxy and reads the
-  // #icerik-listesi table directly — the exact list markup the site uses.
+  // Fetches the raw page HTML through our Cloudflare Worker proxy and reads
+  // the #icerik-listesi table directly — the exact list markup the site uses.
   // NOTE: this table is populated client-side by DataTables/AJAX after the
   // page loads, so a raw (non-JS) fetch of the page only ever contains the
   // empty header placeholder row. This method will almost always fall
