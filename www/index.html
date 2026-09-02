@@ -575,7 +575,17 @@
   }
 
   function loadListViaReader(url, box, opts){
-    return fetchTableRows(url)
+    // meb.gov.tr'de "table.icerik-listesi" seçicisi, sayfanın başka bir
+    // yerindeki (ör. kenar çubuğu/hızlı erişim) aynı CSS class'ını taşıyan
+    // ama duyuru/haberle ilgisi olmayan bir tabloyla da eşleşebiliyor —
+    // asıl liste zaten hep JS/AJAX ile geldiğinden bu ham tarama meb için
+    // hiçbir zaman doğru veri getirmez, o yüzden meb'de bu adımı atlayıp
+    // doğrudan reader (r.jina.ai) adımına geçiyoruz.
+    var tableStep = (opts.originHost === 'meb.gov.tr')
+      ? Promise.reject(new Error('skip-table-scrape-for-meb'))
+      : fetchTableRows(url);
+
+    return tableStep
       .then(function(items){
         if(items.length === 0) throw new Error('empty-table');
         renderItems(box, items);
