@@ -573,8 +573,15 @@
             renderItems(box, items);
           })
           .catch(function(){
-            // AJAX uç noktası da başarısız olursa eski reader/regex yoluna düş.
-            return loadListViaReader(url, box, opts);
+            // MEB'in AJAX ucu bot korumasi (WAF) tarafindan engelleniyor ve bu
+            // hem bizim proxy'den hem de tarayicidan dogrudan yapilan istekte
+            // ayni sekilde 403 donuyor. Bu durumda reader (r.jina.ai) adimina
+            // DUSMUYORUZ, cunku reader sayfadaki hakkimizda/footer linklerini
+            // (Misyon Vizyon, OECD Raporlari vb.) yanlislikla yakalayip gercek
+            // duyuru/haber listesiymis gibi gosteriyor. Onun yerine dogrudan
+            // sayfayi iframe icinde gosteriyoruz; liste orada tarayicinin
+            // kendisi tarafindan normal sekilde (WAF'a takilmadan) yuklenir.
+            showFallback(box, url);
           });
       }
     }
