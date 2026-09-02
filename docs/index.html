@@ -315,6 +315,14 @@
       <button class="btn" type="button" data-school="uhio">Duyurular ve Haberler</button>
     </div>
 
+    <div class="panel">
+      <div class="panel-head">
+        <div class="mono">MEB</div>
+        <p class="school-name">Millî Eğitim Bakanlığı</p>
+      </div>
+      <button class="btn" type="button" data-school="meb">Duyurular ve Haberler</button>
+    </div>
+
   </div>
 </div>
 
@@ -365,6 +373,15 @@
       name: "Ulubatlı Hasan İmam Hatip Ortaokulu",
       duyurular: "https://ulubatlihasaniho.meb.k12.tr/icerikler/icerikler/listele_392275_Duyurular",
       haberler: "https://ulubatlihasaniho.meb.k12.tr/icerikler/icerikler/listele_392274_Haberler"
+    },
+    meb: {
+      name: "Millî Eğitim Bakanlığı",
+      duyurular: "https://meb.gov.tr/meb_duyuruindex.php",
+      haberler: "https://meb.gov.tr/meb_haberindex.php?KATEGORI=286",
+      // meb.gov.tr detay linkleri /icerikler/ değil /duyuru/ veya /haber/ segmenti içerir,
+      // ve bazı duyurular alt alan adlarına (ör. personel.meb.gov.tr) çıkabilir.
+      linkPattern: /\/(duyuru|haber)\//,
+      originHost: "meb.gov.tr"
     }
   };
 
@@ -417,8 +434,8 @@
     detailView.classList.add('active');
     window.scrollTo(0,0);
 
-    loadList(s.haberler, haberlerBox);
-    loadList(s.duyurular, duyurularBox);
+    loadList(s.haberler, haberlerBox, s);
+    loadList(s.duyurular, duyurularBox, s);
   }
 
   // Opens an item's own page inside the app (same place) instead of a new tab.
@@ -441,7 +458,8 @@
     return fetch(url, { signal: controller.signal }).finally(function(){ clearTimeout(timer); });
   }
 
-  function loadList(url, box){
+  function loadList(url, box, source){
+    var opts = source || {};
     return fetchTableRows(url)
       .then(function(items){
         if(items.length === 0) throw new Error('empty-table');
@@ -454,7 +472,7 @@
             return res.text();
           })
           .then(function(text){
-            var items = extractItems(text, url);
+            var items = extractItems(text, url, opts);
             if(items.length === 0) throw new Error('empty-reader');
             renderItems(box, items);
           });
@@ -497,8 +515,11 @@
       });
   }
 
-  function extractItems(text, baseUrl){
+  function extractItems(text, baseUrl, opts){
+    opts = opts || {};
     var origin = new URL(baseUrl).origin;
+    var linkPattern = opts.linkPattern || /\/icerikler\//;
+    var originHost = opts.originHost || null; // varsa: bu ana alan adı ve alt alan adları kabul edilir
     var items = [];
     var seen = {};
 
@@ -507,8 +528,16 @@
       if(title.length < 4) return;
       var full;
       try { full = new URL(rawUrl, baseUrl).href; } catch(e){ return; }
-      if(full.indexOf(origin) !== 0) return;
-      if(!/\/icerikler\//.test(full)) return;
+
+      if(originHost){
+        var host;
+        try { host = new URL(full).hostname; } catch(e){ return; }
+        if(host !== originHost && host.slice(-(originHost.length + 1)) !== ('.' + originHost)) return;
+      } else if(full.indexOf(origin) !== 0){
+        return;
+      }
+
+      if(!linkPattern.test(full)) return;
       if(seen[full]) return;
       seen[full] = true;
       items.push({ title: title, url: full, date: date || '' });
