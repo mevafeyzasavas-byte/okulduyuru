@@ -381,7 +381,27 @@
       // meb.gov.tr detay linkleri /icerikler/ değil /duyuru/ veya /haber/ segmenti içerir,
       // ve bazı duyurular alt alan adlarına (ör. personel.meb.gov.tr) çıkabilir.
       linkPattern: /\/(duyuru|haber)\//,
-      originHost: "meb.gov.tr"
+      originHost: "meb.gov.tr",
+      // Asıl liste, sayfanın kendi DataTables AJAX uç noktasından geliyor.
+      // DevTools > Network'te bulundu: POST ile çağrılan bu uç nokta,
+      // {"data":[{"BASLIK":..,"ISLEMSAAT":"DD/MM/YYYY","LINK":..}], ...} döner.
+      // loadList() bu alanlar varsa doğrudan bunu kullanır; reader/regex
+      // yolu (ve aşağıdaki excludePattern) sadece bu istek başarısız olursa
+      // devreye giren yedek.
+      duyurularAjax: "https://www.meb.gov.tr/meb_duyuruindex_ajax.php",
+      duyurularKategori: 4,
+      // NOT: haber ucu için aynı DevTools kontrolü yapılmadı; kategori
+      // değeri eski "?KATEGORI=286" query'sinden tahmin edildi. Haberler
+      // listesi boş/yanlış gelirse, meb_haberindex.php sayfasında aynı
+      // şekilde Network > Fetch/XHR'dan gerçek uç noktayı ve kategori
+      // değerini doğrulayın.
+      haberlerAjax: "https://www.meb.gov.tr/meb_haberindex_ajax.php",
+      haberlerKategori: 286,
+      // Asıl duyuru/haber tablosu sayfada JS/AJAX ile dolduruluyor; ham/reader
+      // taramasında tabloya erişemediğimizde extractItems tüm sayfadaki linkleri
+      // tarıyor ve footer'daki sabit "duyuru" sayfalarını da yakalıyor. Bilinen
+      // bu tür sabit linkleri burada eleyin (yeni bir tane fark ederseniz ekleyin).
+      excludePattern: /\/(erisilebilirlik|gizlilik|iletisim|sss)\/|ts-isoiec-27001/
     }
   };
 
@@ -452,15 +472,120 @@
     window.scrollTo(0,0);
   }
 
-  function fetchWithTimeout(url, ms){
+  function fetchWithTimeout(url, ms, fetchOpts){
     var controller = new AbortController();
     var timer = setTimeout(function(){ controller.abort(); }, ms);
-    return fetch(url, { signal: controller.signal }).finally(function(){ clearTimeout(timer); });
+    var init = Object.assign({}, fetchOpts || {}, { signal: controller.signal });
+    return fetch(url, init).finally(function(){ clearTimeout(timer); });
+  }
+
+  // meb.gov.tr'nin kendi DataTables AJAX uç noktasını çağırır (bkz. SCHOOLS.meb
+  // yorumları). Standart DataTables server-side POST alanlarını + sitenin
+  // kendine özgü "kategori" parametresini gönderir ve dönen JSON'daki
+  // BASLIK/ISLEMSAAT/LINK alanlarını item listesine çevirir.
+  function buildMebAjaxBody(kategori){
+    var p = new URLSearchParams();
+    p.set('draw', '1');
+    p.set('columns[0][data]', 'ISLEMSAAT');
+    p.set('columns[0][name]', '');
+    p.set('columns[0][searchable]', 'true');
+    p.set('columns[0][orderable]', 'true');
+    p.set('columns[0][search][value]', '');
+    p.set('columns[0][search][regex]', 'false');
+    p.set('columns[1][data]', 'BASLIK');
+    p.set('columns[1][name]', '');
+    p.set('columns[1][searchable]', 'true');
+    p.set('columns[1][orderable]', 'true');
+    p.set('columns[1][search][value]', '');
+    p.set('columns[1][search][regex]', 'false');
+    p.set('order[0][column]', '0');
+    p.set('order[0][dir]', 'desc');
+    p.set('order[0][name]', '');
+    p.set('start', '0');
+    p.set('length', '25');
+    p.set('search[value]', '');
+    p.set('search[regex]', 'false');
+    p.set('kategori', String(kategori));
+    return p;
+  }
+
+  function parseMebAjaxResponse(json, ajaxUrl){
+    var rows = (json && json.data) || [];
+    var items = [];
+    rows.forEach(function(row){
+      var title = (row.BASLIK || '').replace(/\s+/g,' ').trim();
+      var rawLink = row.LINK || '';
+      if(!title || !rawLink) return;
+      var full;
+      // LINK bazen mutlak (https://personel.meb.gov.tr/...), bazen köke göre
+      // göreli ("/2026-.../duyuru/41623/") geliyor; ikisi de meb.gov.tr'ye
+      // göre çözülüyor.
+      try { full = new URL(rawLink, 'https://www.meb.gov.tr/').href; } catch(e){ return; }
+      items.push({ title: title, url: full, date: row.ISLEMSAAT || '' });
+    });
+    return items;
+  }
+
+  function fetchMebAjaxList(ajaxUrl, kategori){
+    function attempt(targetUrl){
+      return fetchWithTimeout(targetUrl, 6000, {
+        method: 'POST',
+        body: buildMebAjaxBody(kategori)
+      }).then(function(res){
+        if(!res.ok) throw new Error('meb-ajax-failed');
+        return res.json();
+      });
+    }
+    // Önce doğrudan dene; tarayıcıdan çapraz-origin istek CORS'a takılırsa
+    // (uç nokta kendi sitesi dışına Access-Control-Allow-Origin vermiyorsa)
+    // aynı POST'u corsproxy üzerinden tekrar dener.
+    return attempt(ajaxUrl)
+      .catch(function(){
+        return attempt('https://corsproxy.io/?url=' + encodeURIComponent(ajaxUrl));
+      })
+      .then(function(json){
+        return parseMebAjaxResponse(json, ajaxUrl);
+      });
   }
 
   function loadList(url, box, source){
     var opts = source || {};
-    return fetchTableRows(url)
+
+    if(opts.originHost === 'meb.gov.tr'){
+      var mebAjaxUrl = null, mebKategori = null;
+      if(url === opts.duyurular && opts.duyurularAjax){
+        mebAjaxUrl = opts.duyurularAjax; mebKategori = opts.duyurularKategori;
+      } else if(url === opts.haberler && opts.haberlerAjax){
+        mebAjaxUrl = opts.haberlerAjax; mebKategori = opts.haberlerKategori;
+      }
+      if(mebAjaxUrl){
+        return fetchMebAjaxList(mebAjaxUrl, mebKategori)
+          .then(function(items){
+            if(items.length === 0) throw new Error('empty-meb-ajax');
+            renderItems(box, items);
+          })
+          .catch(function(){
+            // AJAX uç noktası da başarısız olursa eski reader/regex yoluna düş.
+            return loadListViaReader(url, box, opts);
+          });
+      }
+    }
+
+    return loadListViaReader(url, box, opts);
+  }
+
+  function loadListViaReader(url, box, opts){
+    // meb.gov.tr'de "table.icerik-listesi" seçicisi, sayfanın başka bir
+    // yerindeki (ör. kenar çubuğu/hızlı erişim) aynı CSS class'ını taşıyan
+    // ama duyuru/haberle ilgisi olmayan bir tabloyla da eşleşebiliyor —
+    // asıl liste zaten hep JS/AJAX ile geldiğinden bu ham tarama meb için
+    // hiçbir zaman doğru veri getirmez, o yüzden meb'de bu adımı atlayıp
+    // doğrudan reader (r.jina.ai) adımına geçiyoruz.
+    var tableStep = (opts.originHost === 'meb.gov.tr')
+      ? Promise.reject(new Error('skip-table-scrape-for-meb'))
+      : fetchTableRows(url);
+
+    return tableStep
       .then(function(items){
         if(items.length === 0) throw new Error('empty-table');
         renderItems(box, items);
@@ -520,6 +645,10 @@
     var origin = new URL(baseUrl).origin;
     var linkPattern = opts.linkPattern || /\/icerikler\//;
     var originHost = opts.originHost || null; // varsa: bu ana alan adı ve alt alan adları kabul edilir
+    // Sayfanın geneline (footer/menü/banner) serpiştirilmiş, listeyle ilgisi olmayan
+    // ama linkPattern ile de eşleşen sabit linkleri elemek için (ör. meb.gov.tr'de
+    // "erisilebilirlik" veya "ts-isoiec-27001" gibi footer duyuruları).
+    var excludePattern = opts.excludePattern || null;
     var items = [];
     var seen = {};
 
@@ -538,6 +667,7 @@
       }
 
       if(!linkPattern.test(full)) return;
+      if(excludePattern && excludePattern.test(full)) return;
       if(seen[full]) return;
       seen[full] = true;
       items.push({ title: title, url: full, date: date || '' });
