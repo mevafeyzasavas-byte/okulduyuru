@@ -598,7 +598,7 @@
     // doğrudan reader (r.jina.ai) adımına geçiyoruz.
     var tableStep = (opts.originHost === 'meb.gov.tr')
       ? Promise.reject(new Error('skip-table-scrape-for-meb'))
-      : fetchTableRows(url);
+      : fetchTableRows(url, opts);
 
     return tableStep
       .then(function(items){
@@ -629,7 +629,8 @@
   // empty header placeholder row. This method will almost always fall
   // through to the reader step below for this site; it's kept first because
   // it's cheap and works for any site that renders its list server-side.
-  function fetchTableRows(url){
+  function fetchTableRows(url, opts){
+    opts = opts || {};
     return fetchWithTimeout(corsProxyUrl(url), 5000)
       .then(function(res){
         if(!res.ok) throw new Error('proxy-failed');
@@ -650,6 +651,42 @@
           var full;
           try { full = new URL(a.getAttribute('href'), url).href; } catch(e){ return; }
           items.push({ title: title, url: full, date: date });
+        });
+        if(items.length > 0) return items;
+
+        // Tablo bulunamadı: bu sitede liste #icerik-listesi tablosu değil,
+        // sayfanın kendi HTML'inde düz <a href="/icerikler/...">Başlık</a>
+        // linkleri olarak geliyor olabilir (ör. okul siteleri). Aynı ham
+        // HTML üzerinde linkPattern'e uyan tüm bağlantıları tarayarak
+        // reader (r.jina.ai) adımına hiç düşmeden listeyi çıkarmayı dene.
+        var linkPattern = opts.linkPattern || /\/icerikler\//;
+        var originHost = opts.originHost || null;
+        var excludePattern = opts.excludePattern || null;
+        var pageOrigin;
+        try { pageOrigin = new URL(url).origin; } catch(e){ pageOrigin = null; }
+        var seen = {};
+        doc.querySelectorAll('a[href]').forEach(function(a){
+          var href = a.getAttribute('href');
+          if(!href) return;
+          var full;
+          try { full = new URL(href, url).href; } catch(e){ return; }
+
+          if(originHost){
+            var host;
+            try { host = new URL(full).hostname; } catch(e){ return; }
+            if(host !== originHost && host.slice(-(originHost.length + 1)) !== ('.' + originHost)) return;
+          } else if(pageOrigin && full.indexOf(pageOrigin) !== 0){
+            return;
+          }
+
+          if(!linkPattern.test(full)) return;
+          if(excludePattern && excludePattern.test(full)) return;
+          if(seen[full]) return;
+
+          var title = a.textContent.replace(/\s+/g,' ').trim();
+          if(title.length < 4) return;
+          seen[full] = true;
+          items.push({ title: title, url: full, date: '' });
         });
         return items;
       });
