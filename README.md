@@ -1,44 +1,65 @@
 # Okul Duyuru - APK
 
-Bu klasör, `okulduyuru.html` uygulamasını GitHub Actions üzerinden otomatik olarak
-Android APK'sına dönüştürüp, GitHub Releases sayfasına yükleyecek şekilde hazırlanmıştır.
+Bu repo iki parçadan oluşur:
+
+1. **`docs/index.html`** — asıl uygulama (haberler/duyurular listesi, tarih filtresi
+   dahil). GitHub Pages ile yayınlanır. İçeriği değiştirip push ettiğinizde,
+   telefonlardaki uygulama **APK'yı yeniden kurmaya gerek kalmadan** anında
+   güncel halini gösterir.
+2. **`www/index.html`** — APK'nın içine gömülen, çok küçük bir "yönlendirici"
+   sayfa. Açılışta doğrudan `docs/index.html`'in yayınlandığı GitHub Pages
+   adresine yönlenir. Bu dosyaya normalde dokunmanıza gerek yok.
+
 Uygulama simgesi olarak MEB logosu kullanılmıştır (`res/icon/android/*`).
 
 ## Kurulum (tek seferlik)
 
-1. GitHub'da **yeni bir repo** oluşturun (örnek: `okulduyuru-apk`), boş olarak.
-2. Bu klasördeki tüm dosyaları o reponun içine kopyalayıp push edin:
+### 1) Kodu push edin
+Bu klasördeki tüm dosyaları reponuzun köküne push edin (zaten yaptıysanız
+atlayabilirsiniz).
 
-```bash
-cd okulduyuru-apk
-git init
-git add .
-git commit -m "İlk sürüm"
-git branch -M main
-git remote add origin https://github.com/KULLANICI_ADIN/okulduyuru-apk.git
-git push -u origin main
+### 2) GitHub Pages'i açın
+1. Repo **Settings → Pages**
+2. **Source**: "Deploy from a branch"
+3. **Branch**: `main`, klasör: **`/docs`**
+4. **Save**
+
+Birkaç dakika içinde uygulamanız şu adreste yayında olur:
+```
+https://KULLANICI_ADIN.github.io/REPO_ADIN/
 ```
 
-3. Push işleminden sonra GitHub, reponuzun **Actions** sekmesinde otomatik olarak
-   "Build APK" iş akışını çalıştırır (birkaç dakika sürer).
-4. İşlem bitince reponuzun **Releases** sayfasında `latest` etiketiyle bir sürüm
-   oluşur ve `okulduyuru.apk` dosyası oraya eklenir.
+> Bu proje için adres: `https://mevafeyzasavas-byte.github.io/okulduyuru/`
+> Bu link `www/index.html` içinde `REMOTE_URL` değişkenine zaten yazılı.
+> Kullanıcı adınız/repo adınız farklıysa `www/index.html` içindeki
+> `REMOTE_URL` satırını güncelleyip **bir kez daha** APK derlemeniz gerekir
+> (sonrasında bir daha gerekmez).
 
-## Doğrudan indirme linki
+### 3) Workflow izinleri
+**Settings → Actions → General → Workflow permissions →
+"Read and write permissions"** seçip kaydedin (APK'nın Releases'e
+yüklenebilmesi için gerekli).
 
-İş akışı her tamamlandığında aynı linkte APK güncellenir, yani bu link **sabit**
-kalır (paylaşmak için idealdir):
+### 4) APK'yı indirin
+Push sonrası **Actions** sekmesinde "Build APK" otomatik çalışır. Bitince
+repo ana sayfasının sağındaki **Releases** bölümünde sabit bir linkle
+`okulduyuru.apk` belirir:
 
 ```
-https://github.com/KULLANICI_ADIN/okulduyuru-apk/releases/latest/download/okulduyuru.apk
+https://github.com/mevafeyzasavas-byte/okulduyuru/releases/latest/download/okulduyuru.apk
 ```
 
-`KULLANICI_ADIN` kısmını kendi GitHub kullanıcı adınızla değiştirin.
+## Bundan sonra nasıl güncelleme yaparım?
 
-## HTML dosyasını güncellemek istersen
-
-`www/index.html` dosyasını değiştirip tekrar `git push` yapmanız yeterli;
-Actions otomatik olarak yeni bir APK derleyip Releases'e yükler.
+- **İçerik/görünüm/filtre değişikliği** (ör. haber filtresi, tasarım, okul
+  listesi) → sadece **`docs/index.html`**'i düzenleyip push edin. GitHub
+  Pages otomatik günceller, telefonlardaki uygulama açılışta yeni sürümü
+  çeker. **APK'yı tekrar indirmeye gerek yok.**
+- **Uygulama simgesi, adı veya yönlendirme adresi** gibi APK'nın kendisiyle
+  ilgili bir şey değişirse → `www/index.html`, `config.xml` veya `res/`
+  içinde değişiklik yapıp push edin; bu durumda Actions yeni bir APK
+  derler ve Releases'teki dosya güncellenir, kullanıcıların o zaman
+  yeniden indirmesi gerekir.
 
 ## Not
 
