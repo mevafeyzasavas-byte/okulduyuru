@@ -364,11 +364,68 @@
 
 <script>
   // Kendi Cloudflare Worker'ımız üzerinden proxy yapıyoruz (ücretsiz katman,
-  // günde 100.000 istek). corsproxy.io'ya bağımlılık kaldırıldı.
+  // günde 100.000 istek). corsproxy.io'yu anahtarsız/anonim çağırmak zaman
+  // zaman 401/timeout ile başarısız oluyordu; bu da listenin yerine tüm
+  // sayfanın iframe'de gösterilmesine (showFallback) yol açan asıl sebepti.
   var WORKER_URL = 'https://mebduyuru-proxy.aorhansvs.workers.dev';
 
   function corsProxyUrl(targetUrl){
     return WORKER_URL + '/?url=' + encodeURIComponent(targetUrl);
+  }
+
+  // Bu tarihten (dahil) daha eski duyuru/haberler listede gösterilmez.
+  // Değiştirmek istersen sadece bu satırı güncelle (ay 0'dan başlar: 5 = Haziran).
+  var MIN_DATE = new Date(2026, 5, 1); // 01.06.2026
+
+  // "28/02/2026", "28-02-2026", "28.02.2026", "2026-02-28" ve başında/sonunda
+  // saat olan varyasyonları ("28.02.2026 14:23:00") ayrıştırır. Tanınamayan
+  // bir biçimse null döner (bu durumda öğe gizlenmez, gösterilmeye devam eder).
+  function parseItemDate(str){
+    if(!str) return null;
+    var datePart = String(str).trim().split(/\s+/)[0];
+    var m = datePart.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(m) return new Date(+m[1], +m[2] - 1, +m[3]);
+    m = datePart.match(/^(\d{2})[.\/\-](\d{2})[.\/\-](\d{4})$/);
+    if(m) return new Date(+m[3], +m[2] - 1, +m[1]);
+    return null;
+  }
+
+  function delay(ms){
+    return new Promise(function(resolve){ setTimeout(resolve, ms); });
+  }
+
+  // Canlı liste alınamadığında en son başarılı yüklemeyi göstermek için basit
+  // bir localStorage önbelleği. Böylece geçici ağ/proxy hataları artık her
+  // seferinde tüm siteyi iframe içinde göstermek zorunda bırakmıyor.
+  var CACHE_PREFIX = 'okulduyuru_cache_v1_';
+
+  function readCache(cacheKey){
+    if(!cacheKey) return null;
+    try {
+      var raw = localStorage.getItem(CACHE_PREFIX + cacheKey);
+      if(!raw) return null;
+      var parsed = JSON.parse(raw);
+      if(!parsed || !parsed.items || !parsed.items.length) return null;
+      return parsed;
+    } catch(e){ return null; }
+  }
+
+  function writeCache(cacheKey, items){
+    if(!cacheKey) return;
+    try {
+      localStorage.setItem(CACHE_PREFIX + cacheKey, JSON.stringify({ items: items, savedAt: Date.now() }));
+    } catch(e){ /* localStorage dolu/erişilemez olabilir, sessizce geç */ }
+  }
+
+  function renderFromCache(box, cacheKey){
+    var cached = readCache(cacheKey);
+    if(!cached) return false;
+    var ageDays = Math.round((Date.now() - cached.savedAt) / 86400000);
+    var note = ageDays <= 0
+      ? 'Canlı liste şu an alınamadı, en son başarılı yüklemedeki liste gösteriliyor.'
+      : 'Canlı liste şu an alınamadı, ' + ageDays + ' gün önceki son başarılı yüklemeden gösteriliyor.';
+    renderItems(box, cached.items, note);
+    return true;
   }
 
   var SCHOOLS = {
@@ -386,29 +443,12 @@
       name: "Millî Eğitim Bakanlığı",
       duyurular: "https://meb.gov.tr/meb_duyuruindex.php",
       haberler: "https://meb.gov.tr/meb_haberindex.php?KATEGORI=286",
-      // meb.gov.tr detay linkleri /icerikler/ değil /duyuru/ veya /haber/ segmenti içerir,
-      // ve bazı duyurular alt alan adlarına (ör. personel.meb.gov.tr) çıkabilir.
       linkPattern: /\/(duyuru|haber)\//,
       originHost: "meb.gov.tr",
-      // Asıl liste, sayfanın kendi DataTables AJAX uç noktasından geliyor.
-      // DevTools > Network'te bulundu: POST ile çağrılan bu uç nokta,
-      // {"data":[{"BASLIK":..,"ISLEMSAAT":"DD/MM/YYYY","LINK":..}], ...} döner.
-      // loadList() bu alanlar varsa doğrudan bunu kullanır; reader/regex
-      // yolu (ve aşağıdaki excludePattern) sadece bu istek başarısız olursa
-      // devreye giren yedek.
       duyurularAjax: "https://www.meb.gov.tr/meb_duyuruindex_ajax.php",
       duyurularKategori: 4,
-      // NOT: haber ucu için aynı DevTools kontrolü yapılmadı; kategori
-      // değeri eski "?KATEGORI=286" query'sinden tahmin edildi. Haberler
-      // listesi boş/yanlış gelirse, meb_haberindex.php sayfasında aynı
-      // şekilde Network > Fetch/XHR'dan gerçek uç noktayı ve kategori
-      // değerini doğrulayın.
       haberlerAjax: "https://www.meb.gov.tr/meb_haberindex_ajax.php",
       haberlerKategori: 286,
-      // Asıl duyuru/haber tablosu sayfada JS/AJAX ile dolduruluyor; ham/reader
-      // taramasında tabloya erişemediğimizde extractItems tüm sayfadaki linkleri
-      // tarıyor ve footer'daki sabit "duyuru" sayfalarını da yakalıyor. Bilinen
-      // bu tür sabit linkleri burada eleyin (yeni bir tane fark ederseniz ekleyin).
       excludePattern: /\/(erisilebilirlik|gizlilik|iletisim|sss)\/|ts-isoiec-27001/
     }
   };
@@ -430,8 +470,8 @@
 
   document.querySelectorAll('.btn').forEach(function(btn){
     btn.addEventListener('click', function(){
-      var s = SCHOOLS[btn.getAttribute('data-school')];
-      openDetail(s);
+      var key = btn.getAttribute('data-school');
+      openDetail(SCHOOLS[key], key);
     });
   });
 
@@ -450,7 +490,7 @@
     window.scrollTo(0,0);
   });
 
-  function openDetail(s){
+  function openDetail(s, key){
     detailSchool.textContent = s.name;
     duyurularSiteLink.href = s.duyurular;
     haberlerSiteLink.href = s.haberler;
@@ -462,8 +502,10 @@
     detailView.classList.add('active');
     window.scrollTo(0,0);
 
-    loadList(s.haberler, haberlerBox, s);
-    loadList(s.duyurular, duyurularBox, s);
+    loadList(s.haberler, haberlerBox, s, key + '_haberler');
+    delay(350).then(function(){
+      loadList(s.duyurular, duyurularBox, s, key + '_duyurular');
+    });
   }
 
   // Opens an item's own page inside the app (same place) instead of a new tab.
@@ -487,10 +529,10 @@
     return fetch(url, init).finally(function(){ clearTimeout(timer); });
   }
 
-  // meb.gov.tr'nin kendi DataTables AJAX uç noktasını çağırır (bkz. SCHOOLS.meb
-  // yorumları). Standart DataTables server-side POST alanlarını + sitenin
-  // kendine özgü "kategori" parametresini gönderir ve dönen JSON'daki
-  // BASLIK/ISLEMSAAT/LINK alanlarını item listesine çevirir.
+  // meb.gov.tr'nin kendi DataTables AJAX uç noktasını çağırır. Standart
+  // DataTables server-side POST alanlarını + sitenin kendine özgü "kategori"
+  // parametresini gönderir ve dönen JSON'daki BASLIK/ISLEMSAAT/LINK
+  // alanlarını item listesine çevirir.
   function buildMebAjaxBody(kategori){
     var p = new URLSearchParams();
     p.set('draw', '1');
@@ -517,7 +559,7 @@
     return p;
   }
 
-  function parseMebAjaxResponse(json, ajaxUrl){
+  function parseMebAjaxResponse(json){
     var rows = (json && json.data) || [];
     var items = [];
     rows.forEach(function(row){
@@ -525,9 +567,6 @@
       var rawLink = row.LINK || '';
       if(!title || !rawLink) return;
       var full;
-      // LINK bazen mutlak (https://personel.meb.gov.tr/...), bazen köke göre
-      // göreli ("/2026-.../duyuru/41623/") geliyor; ikisi de meb.gov.tr'ye
-      // göre çözülüyor.
       try { full = new URL(rawLink, 'https://www.meb.gov.tr/').href; } catch(e){ return; }
       items.push({ title: title, url: full, date: row.ISLEMSAAT || '' });
     });
@@ -544,19 +583,12 @@
         return res.json();
       });
     }
-    // Önce doğrudan dene; tarayıcıdan çapraz-origin istek CORS'a takılırsa
-    // (uç nokta kendi sitesi dışına Access-Control-Allow-Origin vermiyorsa)
-    // aynı POST'u Worker proxy üzerinden tekrar dener.
     return attempt(ajaxUrl)
-      .catch(function(){
-        return attempt(corsProxyUrl(ajaxUrl));
-      })
-      .then(function(json){
-        return parseMebAjaxResponse(json, ajaxUrl);
-      });
+      .catch(function(){ return attempt(corsProxyUrl(ajaxUrl)); })
+      .then(function(json){ return parseMebAjaxResponse(json); });
   }
 
-  function loadList(url, box, source){
+  function loadList(url, box, source, cacheKey){
     var opts = source || {};
 
     if(opts.originHost === 'meb.gov.tr'){
@@ -568,70 +600,86 @@
       }
       if(mebAjaxUrl){
         return fetchMebAjaxList(mebAjaxUrl, mebKategori)
+          .catch(function(){
+            // İlk deneme (kendi sunucumuz + proxy) başarısız oldu; kısa bir
+            // bekleme sonrası bir kez daha dene. Çoğu "F5 çekince düzeliyor"
+            // durumu, geçici bir zaman aşımı/rate-limit yüzündendir.
+            return delay(700).then(function(){ return fetchMebAjaxList(mebAjaxUrl, mebKategori); });
+          })
           .then(function(items){
             if(items.length === 0) throw new Error('empty-meb-ajax');
+            writeCache(cacheKey, items);
             renderItems(box, items);
           })
           .catch(function(){
-            // MEB'in AJAX ucu bot korumasi (WAF) tarafindan engelleniyor ve bu
-            // hem bizim proxy'den hem de tarayicidan dogrudan yapilan istekte
-            // ayni sekilde 403 donuyor. Bu durumda reader (r.jina.ai) adimina
-            // DUSMUYORUZ, cunku reader sayfadaki hakkimizda/footer linklerini
-            // (Misyon Vizyon, OECD Raporlari vb.) yanlislikla yakalayip gercek
-            // duyuru/haber listesiymis gibi gosteriyor. Onun yerine dogrudan
-            // sayfayi iframe icinde gosteriyoruz; liste orada tarayicinin
-            // kendisi tarafindan normal sekilde (WAF'a takilmadan) yuklenir.
-            showFallback(box, url);
+            // MEB'in AJAX ucu bot koruması (WAF) tarafından engelleniyor ve bu
+            // hem bizim proxy'den hem de tarayıcıdan doğrudan yapılan istekte
+            // aynı şekilde 403 dönüyor. Reader (r.jina.ai) adımına DÜŞMÜYORUZ,
+            // çünkü reader sayfadaki hakkımızda/footer linklerini yanlışlıkla
+            // yakalayıp gerçek liste gibi gösteriyor. Önce önbellekteki son
+            // başarılı listeyi göstermeyi dene; hiç önbellek yoksa doğrudan
+            // sayfayı iframe içinde göster.
+            if(!renderFromCache(box, cacheKey)){
+              showFallback(box, url);
+            }
           });
       }
     }
 
-    return loadListViaReader(url, box, opts);
-  }
-
-  function loadListViaReader(url, box, opts){
-    // meb.gov.tr'de "table.icerik-listesi" seçicisi, sayfanın başka bir
-    // yerindeki (ör. kenar çubuğu/hızlı erişim) aynı CSS class'ını taşıyan
-    // ama duyuru/haberle ilgisi olmayan bir tabloyla da eşleşebiliyor —
-    // asıl liste zaten hep JS/AJAX ile geldiğinden bu ham tarama meb için
-    // hiçbir zaman doğru veri getirmez, o yüzden meb'de bu adımı atlayıp
-    // doğrudan reader (r.jina.ai) adımına geçiyoruz.
-    var tableStep = (opts.originHost === 'meb.gov.tr')
-      ? Promise.reject(new Error('skip-table-scrape-for-meb'))
-      : fetchTableRows(url, opts);
-
-    return tableStep
+    // AHTI / UHIO: normal tablo + reader yolu, geçici hatalara karşı aralarda
+    // kısa bekleme koyarak yeniden dener (proxy/worker'ı art arda yormamak
+    // ve geçici hataların kendini toparlaması için).
+    return fetchTableRows(url)
+      .catch(function(){ return delay(700).then(function(){ return fetchTableRows(url); }); })
       .then(function(items){
         if(items.length === 0) throw new Error('empty-table');
+        writeCache(cacheKey, items);
         renderItems(box, items);
       })
       .catch(function(){
-        return fetchWithTimeout('https://r.jina.ai/' + url, 6000)
-          .then(function(res){
-            if(!res.ok) throw new Error('reader-failed');
-            return res.text();
+        // Reader (r.jina.ai) üzerinden 3 deneme (artan bekleme ile) yap.
+        // Önceden 2 denemeden sonra pes edip komple sayfayı iframe'de
+        // gösteriyordu (showFallback); bu, geçici reader hatalarında bile
+        // sık sık tetikleniyordu. Süreyi ve deneme sayısını artırarak bu
+        // "komple sayfa" düşüşünü azaltıyoruz.
+        var readerDelays = [0, 900, 1800];
+        function attemptReader(i){
+          return delay(readerDelays[i]).then(function(){
+            return fetchWithTimeout('https://r.jina.ai/' + url, 12000);
           })
-          .then(function(text){
-            var items = extractItems(text, url, opts);
-            if(items.length === 0) throw new Error('empty-reader');
-            renderItems(box, items);
-          });
+            .then(function(res){
+              if(!res.ok) throw new Error('reader-failed-' + i);
+              return res.text();
+            })
+            .then(function(text){
+              var items = extractItems(text, url, opts);
+              if(items.length === 0) throw new Error('empty-reader-' + i);
+              writeCache(cacheKey, items);
+              renderItems(box, items);
+            })
+            .catch(function(err){
+              if(i + 1 < readerDelays.length) return attemptReader(i + 1);
+              throw err;
+            });
+        }
+        return attemptReader(0);
       })
       .catch(function(){
-        showFallback(box, url);
+        if(!renderFromCache(box, cacheKey)){
+          showFallback(box, url);
+        }
       });
   }
 
-  // Fetches the raw page HTML through our Cloudflare Worker proxy and reads
-  // the #icerik-listesi table directly — the exact list markup the site uses.
+  // Fetches the raw page HTML through a CORS proxy and reads the
+  // #icerik-listesi table directly — the exact list markup the site uses.
   // NOTE: this table is populated client-side by DataTables/AJAX after the
   // page loads, so a raw (non-JS) fetch of the page only ever contains the
   // empty header placeholder row. This method will almost always fall
   // through to the reader step below for this site; it's kept first because
   // it's cheap and works for any site that renders its list server-side.
-  function fetchTableRows(url, opts){
-    opts = opts || {};
-    return fetchWithTimeout(corsProxyUrl(url), 5000)
+  function fetchTableRows(url){
+    return fetchWithTimeout(corsProxyUrl(url), 8000)
       .then(function(res){
         if(!res.ok) throw new Error('proxy-failed');
         return res.text();
@@ -652,42 +700,6 @@
           try { full = new URL(a.getAttribute('href'), url).href; } catch(e){ return; }
           items.push({ title: title, url: full, date: date });
         });
-        if(items.length > 0) return items;
-
-        // Tablo bulunamadı: bu sitede liste #icerik-listesi tablosu değil,
-        // sayfanın kendi HTML'inde düz <a href="/icerikler/...">Başlık</a>
-        // linkleri olarak geliyor olabilir (ör. okul siteleri). Aynı ham
-        // HTML üzerinde linkPattern'e uyan tüm bağlantıları tarayarak
-        // reader (r.jina.ai) adımına hiç düşmeden listeyi çıkarmayı dene.
-        var linkPattern = opts.linkPattern || /\/icerikler\//;
-        var originHost = opts.originHost || null;
-        var excludePattern = opts.excludePattern || null;
-        var pageOrigin;
-        try { pageOrigin = new URL(url).origin; } catch(e){ pageOrigin = null; }
-        var seen = {};
-        doc.querySelectorAll('a[href]').forEach(function(a){
-          var href = a.getAttribute('href');
-          if(!href) return;
-          var full;
-          try { full = new URL(href, url).href; } catch(e){ return; }
-
-          if(originHost){
-            var host;
-            try { host = new URL(full).hostname; } catch(e){ return; }
-            if(host !== originHost && host.slice(-(originHost.length + 1)) !== ('.' + originHost)) return;
-          } else if(pageOrigin && full.indexOf(pageOrigin) !== 0){
-            return;
-          }
-
-          if(!linkPattern.test(full)) return;
-          if(excludePattern && excludePattern.test(full)) return;
-          if(seen[full]) return;
-
-          var title = a.textContent.replace(/\s+/g,' ').trim();
-          if(title.length < 4) return;
-          seen[full] = true;
-          items.push({ title: title, url: full, date: '' });
-        });
         return items;
       });
   }
@@ -696,10 +708,7 @@
     opts = opts || {};
     var origin = new URL(baseUrl).origin;
     var linkPattern = opts.linkPattern || /\/icerikler\//;
-    var originHost = opts.originHost || null; // varsa: bu ana alan adı ve alt alan adları kabul edilir
-    // Sayfanın geneline (footer/menü/banner) serpiştirilmiş, listeyle ilgisi olmayan
-    // ama linkPattern ile de eşleşen sabit linkleri elemek için (ör. meb.gov.tr'de
-    // "erisilebilirlik" veya "ts-isoiec-27001" gibi footer duyuruları).
+    var originHost = opts.originHost || null;
     var excludePattern = opts.excludePattern || null;
     var items = [];
     var seen = {};
@@ -756,35 +765,20 @@
     return items;
   }
 
-  // 1 Haziran 2026'dan önceki ilanları listede göstermiyoruz.
-  // Tarihi ayrıştırılamayan öğeler (format tanınmazsa) güvenli taraf olarak gösterilir.
-  var CUTOFF_DATE = new Date(2026, 5, 1); // ay 0-indeksli: 5 = Haziran
-
-  function parseTRDate(str){
-    if(!str) return null;
-    var m = str.match(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/);
-    if(!m) return null;
-    var day = parseInt(m[1], 10);
-    var month = parseInt(m[2], 10);
-    var year = parseInt(m[3], 10);
-    var d = new Date(year, month - 1, day);
-    return isNaN(d.getTime()) ? null : d;
-  }
-
-  function filterByCutoff(items){
-    return items.filter(function(item){
-      var d = parseTRDate(item.date);
-      if(!d) return true; // tarih okunamıyorsa listede kalsın
-      return d >= CUTOFF_DATE;
-    });
-  }
-
   function renderItems(box, items){
-    items = filterByCutoff(items);
+    // 06.2026 öncesi (MIN_DATE'ten eski) duyuru/haberleri listeden çıkar.
+    // Tarihi ayrıştırılamayan öğeler (parseItemDate null döner) güvenli
+    // tarafta kalınarak gösterilmeye devam eder.
+    items = items.filter(function(item){
+      var d = parseItemDate(item.date);
+      return !d || d >= MIN_DATE;
+    });
+
     if(items.length === 0){
-      box.innerHTML = '<div class="status">Haziran 2026 sonrası içerik bulunamadı.</div>';
+      box.innerHTML = '<div class="status">Gösterilecek güncel duyuru/haber yok.</div>';
       return;
     }
+
     var ul = document.createElement('ul');
     ul.className = 'item-list';
     items.slice(0, 25).forEach(function(item){
