@@ -6,6 +6,8 @@
 <title>Duyuru ve Haber Panosu</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://mebduyuru-proxy.aorhansvs.workers.dev">
+<link rel="preconnect" href="https://r.jina.ai">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{
@@ -128,7 +130,7 @@
     display:flex;
     align-items:center;
     gap:14px;
-    padding:14px 20px;
+    padding:14px max(20px, calc(50% - 300px));
     background:var(--panel);
     border-bottom:1px solid var(--hairline);
     z-index:5;
@@ -574,135 +576,122 @@
   }
 
   function fetchMebAjaxList(ajaxUrl, kategori){
-    function attempt(targetUrl){
-      return fetchWithTimeout(targetUrl, 6000, {
-        method: 'POST',
-        body: buildMebAjaxBody(kategori)
-      }).then(function(res){
-        if(!res.ok) throw new Error('meb-ajax-failed');
-        return res.json();
-      });
-    }
-    return attempt(ajaxUrl)
-      .catch(function(){ return attempt(corsProxyUrl(ajaxUrl)); })
-      .then(function(json){ return parseMebAjaxResponse(json); });
+    // Doğrudan istek CORS/WAF yüzünden zaten başarısız oluyordu; sadece Worker.
+    return fetchWithTimeout(corsProxyUrl(ajaxUrl), 7000, {
+      method: 'POST',
+      body: buildMebAjaxBody(kategori)
+    }).then(function(res){
+      if(!res.ok) throw new Error('meb-ajax-failed');
+      return res.json();
+    }).then(parseMebAjaxResponse);
   }
 
+  // Okul siteleri: liste JS ile dolduğu için ham HTML boş dönüyordu (boşa
+  // giden adım kaldırıldı). Doğrudan reader; 2 deneme x 9 sn (en kötü ~19 sn).
+  function fetchViaReader(url, opts){
+    var delays = [0, 600];
+    function attempt(i){
+      return delay(delays[i]).then(function(){
+        return fetchWithTimeout('https://r.jina.ai/' + url, 9000);
+      }).then(function(res){
+        if(!res.ok) throw new Error('reader-failed');
+        return res.text();
+      }).then(function(text){
+        var items = extractItems(text, url, opts);
+        if(!items.length) throw new Error('empty-reader');
+        return items;
+      }).catch(function(err){
+        if(i + 1 < delays.length) return attempt(i + 1);
+        throw err;
+      });
+    }
+    return attempt(0);
+  }
+
+  function fetchItems(url, opts){
+    if(opts.originHost === 'meb.gov.tr'){
+      var aj = null, kat = null;
+      if(url === opts.duyurular){ aj = opts.duyurularAjax; kat = opts.duyurularKategori; }
+      else if(url === opts.haberler){ aj = opts.haberlerAjax; kat = opts.haberlerKategori; }
+      if(aj){
+        return fetchMebAjaxList(aj, kat).catch(function(){
+          return delay(500).then(function(){ return fetchMebAjaxList(aj, kat); });
+        }).then(function(items){
+          if(!items.length) throw new Error('empty-meb-ajax');
+          return items;
+        });
+      }
+    }
+    return fetchViaReader(url, opts);
+  }
+
+  // Aynı liste için eşzamanlı tek istek (ön yükleme + kullanıcı tıklaması çakışmasın).
+  var inflight = {};
+  function refresh(cacheKey, url, opts){
+    if(inflight[cacheKey]) return inflight[cacheKey];
+    var p = fetchItems(url, opts).then(function(items){
+      writeCache(cacheKey, items);
+      return items;
+    });
+    inflight[cacheKey] = p;
+    var clear = function(){ delete inflight[cacheKey]; };
+    p.then(clear, clear);
+    return p;
+  }
+
+  // Önce önbellek (anında), sonra arkada yenile. 2 dk'dan tazeyse hiç istek atmaz.
+  var FRESH_MS = 120000;
   function loadList(url, box, source, cacheKey){
     var opts = source || {};
-
-    if(opts.originHost === 'meb.gov.tr'){
-      var mebAjaxUrl = null, mebKategori = null;
-      if(url === opts.duyurular && opts.duyurularAjax){
-        mebAjaxUrl = opts.duyurularAjax; mebKategori = opts.duyurularKategori;
-      } else if(url === opts.haberler && opts.haberlerAjax){
-        mebAjaxUrl = opts.haberlerAjax; mebKategori = opts.haberlerKategori;
-      }
-      if(mebAjaxUrl){
-        return fetchMebAjaxList(mebAjaxUrl, mebKategori)
-          .catch(function(){
-            // İlk deneme (kendi sunucumuz + proxy) başarısız oldu; kısa bir
-            // bekleme sonrası bir kez daha dene. Çoğu "F5 çekince düzeliyor"
-            // durumu, geçici bir zaman aşımı/rate-limit yüzündendir.
-            return delay(700).then(function(){ return fetchMebAjaxList(mebAjaxUrl, mebKategori); });
-          })
-          .then(function(items){
-            if(items.length === 0) throw new Error('empty-meb-ajax');
-            writeCache(cacheKey, items);
-            renderItems(box, items);
-          })
-          .catch(function(){
-            // MEB'in AJAX ucu bot koruması (WAF) tarafından engelleniyor ve bu
-            // hem bizim proxy'den hem de tarayıcıdan doğrudan yapılan istekte
-            // aynı şekilde 403 dönüyor. Reader (r.jina.ai) adımına DÜŞMÜYORUZ,
-            // çünkü reader sayfadaki hakkımızda/footer linklerini yanlışlıkla
-            // yakalayıp gerçek liste gibi gösteriyor. Önce önbellekteki son
-            // başarılı listeyi göstermeyi dene; hiç önbellek yoksa doğrudan
-            // sayfayı iframe içinde göster.
-            if(!renderFromCache(box, cacheKey)){
-              showFallback(box, url);
-            }
-          });
-      }
+    box.dataset.k = cacheKey;
+    // Notu gösterir; hide=true ise ~3,5 sn sonra yumuşakça kaldırır.
+    function show(items, note, hide){
+      renderItems(box, items, note);
+      if(!note || !hide) return;
+      setTimeout(function(){
+        var n = box.querySelector('.live-note');
+        if(!n || box.dataset.k !== cacheKey) return;
+        n.style.transition = 'opacity .4s';
+        n.style.opacity = '0';
+        setTimeout(function(){ if(n.parentNode) n.parentNode.removeChild(n); }, 400);
+      }, 3500);
     }
-
-    // AHTI / UHIO: normal tablo + reader yolu, geçici hatalara karşı aralarda
-    // kısa bekleme koyarak yeniden dener (proxy/worker'ı art arda yormamak
-    // ve geçici hataların kendini toparlaması için).
-    return fetchTableRows(url)
-      .catch(function(){ return delay(700).then(function(){ return fetchTableRows(url); }); })
-      .then(function(items){
-        if(items.length === 0) throw new Error('empty-table');
-        writeCache(cacheKey, items);
-        renderItems(box, items);
-      })
-      .catch(function(){
-        // Reader (r.jina.ai) üzerinden 3 deneme (artan bekleme ile) yap.
-        // Önceden 2 denemeden sonra pes edip komple sayfayı iframe'de
-        // gösteriyordu (showFallback); bu, geçici reader hatalarında bile
-        // sık sık tetikleniyordu. Süreyi ve deneme sayısını artırarak bu
-        // "komple sayfa" düşüşünü azaltıyoruz.
-        var readerDelays = [0, 900, 1800];
-        function attemptReader(i){
-          return delay(readerDelays[i]).then(function(){
-            return fetchWithTimeout('https://r.jina.ai/' + url, 12000);
-          })
-            .then(function(res){
-              if(!res.ok) throw new Error('reader-failed-' + i);
-              return res.text();
-            })
-            .then(function(text){
-              var items = extractItems(text, url, opts);
-              if(items.length === 0) throw new Error('empty-reader-' + i);
-              writeCache(cacheKey, items);
-              renderItems(box, items);
-            })
-            .catch(function(err){
-              if(i + 1 < readerDelays.length) return attemptReader(i + 1);
-              throw err;
-            });
-        }
-        return attemptReader(0);
-      })
-      .catch(function(){
-        if(!renderFromCache(box, cacheKey)){
-          showFallback(box, url);
-        }
-      });
+    var cached = readCache(cacheKey);
+    if(cached){
+      var age = Date.now() - cached.savedAt;
+      if(age < FRESH_MS){ show(cached.items, 'Güncel ✓', true); return Promise.resolve(); }
+      show(cached.items, 'Güncelleniyor…', false);
+    }
+    return refresh(cacheKey, url, opts).then(function(items){
+      if(box.dataset.k !== cacheKey) return;
+      var old = {};
+      if(cached) cached.items.forEach(function(i){ old[i.url] = 1; });
+      var isNew = cached && items.some(function(i){ return !old[i.url]; });
+      show(items, isNew ? 'Yeni içerik eklendi' : 'Güncel ✓', true);
+    }).catch(function(){
+      if(box.dataset.k !== cacheKey) return;
+      if(cached) renderItems(box, cached.items, 'Canlı liste alınamadı, son kaydedilen liste gösteriliyor.');
+      else showFallback(box, url);
+    });
   }
 
-  // Fetches the raw page HTML through a CORS proxy and reads the
-  // #icerik-listesi table directly — the exact list markup the site uses.
-  // NOTE: this table is populated client-side by DataTables/AJAX after the
-  // page loads, so a raw (non-JS) fetch of the page only ever contains the
-  // empty header placeholder row. This method will almost always fall
-  // through to the reader step below for this site; it's kept first because
-  // it's cheap and works for any site that renders its list server-side.
-  function fetchTableRows(url){
-    return fetchWithTimeout(corsProxyUrl(url), 8000)
-      .then(function(res){
-        if(!res.ok) throw new Error('proxy-failed');
-        return res.text();
-      })
-      .then(function(html){
-        var doc = new DOMParser().parseFromString(html, 'text/html');
-        var rows = doc.querySelectorAll('#icerik-listesi tbody tr, table.icerik-listesi tbody tr');
-        var items = [];
-        rows.forEach(function(tr){
-          var tds = tr.querySelectorAll('td');
-          if(tds.length < 2) return;
-          var date = tds[0].textContent.replace(/\s+/g,' ').trim();
-          var a = tds[1].querySelector('a[href]');
-          if(!a) return;
-          var title = a.textContent.replace(/\s+/g,' ').trim();
-          if(title.length < 2) return;
-          var full;
-          try { full = new URL(a.getAttribute('href'), url).href; } catch(e){ return; }
-          items.push({ title: title, url: full, date: date });
-        });
-        return items;
+  // Ana sayfa açılır açılmaz tüm listeleri arka planda ısıt (aralıklı, oran sınırına takılmasın).
+  function prefetchAll(){
+    var jobs = [];
+    Object.keys(SCHOOLS).forEach(function(k){
+      var s = SCHOOLS[k];
+      jobs.push([k + '_haberler', s.haberler, s]);
+      jobs.push([k + '_duyurular', s.duyurular, s]);
+    });
+    jobs.forEach(function(j, i){
+      delay(300 + i * 900).then(function(){
+        var c = readCache(j[0]);
+        if(c && Date.now() - c.savedAt < 300000) return;
+        return refresh(j[0], j[1], j[2]).catch(function(){});
       });
+    });
   }
+  setTimeout(prefetchAll, 0);
 
   function extractItems(text, baseUrl, opts){
     opts = opts || {};
@@ -765,7 +754,7 @@
     return items;
   }
 
-  function renderItems(box, items){
+  function renderItems(box, items, note){
     // 06.2026 öncesi (MIN_DATE'ten eski) duyuru/haberleri listeden çıkar.
     // Tarihi ayrıştırılamayan öğeler (parseItemDate null döner) güvenli
     // tarafta kalınarak gösterilmeye devam eder.
@@ -806,6 +795,13 @@
       ul.appendChild(li);
     });
     box.innerHTML = '';
+    if(note){
+      var n = document.createElement('div');
+      n.className = 'status live-note';
+      n.style.marginBottom = '8px';
+      n.textContent = note;
+      box.appendChild(n);
+    }
     box.appendChild(ul);
   }
 
