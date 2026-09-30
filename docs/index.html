@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
+<!-- sürüm: 2026-09-30-b -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Duyuru ve Haber Panosu</title>
@@ -764,7 +765,18 @@
     });
 
     if(items.length === 0){
-      box.innerHTML = '<div class="status">Gösterilecek güncel duyuru/haber yok.</div>';
+      box.innerHTML = '';
+      if(note){
+        var en = document.createElement('div');
+        en.className = 'status live-note';
+        en.style.marginBottom = '8px';
+        en.textContent = note;
+        box.appendChild(en);
+      }
+      var empty = document.createElement('div');
+      empty.className = 'status';
+      empty.textContent = 'Gösterilecek güncel duyuru/haber yok.';
+      box.appendChild(empty);
       return;
     }
 
